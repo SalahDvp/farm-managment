@@ -1,0 +1,199 @@
+rules_version = '2';
+
+// The browser reads and writes Firestore directly with the Firebase client
+// SDK, so these rules ARE the access control. Each signed-in user owns exactly
+// one farm, rooted at farms/{uid}:
+//
+//   farms/{uid}/items/{itemId}/logs/{logId}
+//   farms/{uid}/fields/{fieldId}
+//   farms/{uid}/tasks/{taskId}
+//   farms/{uid}/meta/counters
+//
+// Beyond ownership, every write is validated: allowed keys only, correct
+// types, enum values, size caps, ids that match the document path, and
+// immutable history. Anything not matched below is denied.
+//
+// Deploy with:  firebase deploy --only firestore:rules,firestore:indexes
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------- helpers
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function data() {
+      return request.resource.data;
+    }
+
+    // String of 1..max characters.
+    function str(v, max) {
+      return v is string && v.size() > 0 && v.size() <= max;
+    }
+
+    // Optional key: absent, or a string of up to max characters.
+    function optStr(key, max) {
+      return !(key in data()) || (data()[key] is string && data()[key].size() <= max);
+    }
+
+    function isoDate(v) {
+      return v is string && v.size() <= 40 && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}.*');
+    }
+
+    function optIsoDate(key) {
+      return !(key in data()) || isoDate(data()[key]);
+    }
+
+    // Fields that must never change once a document exists.
+    function unchanged(keys) {
+      return !data().diff(resource.data).affectedKeys().hasAny(keys);
+    }
+
+    // ------------------------------------------------------------- validators
+
+    function validItem(itemId) {
+      let d = data();
+      return d.keys().hasOnly(['id', 'name', 'itemType', 'fieldId', 'species', 'breed', 'zone', 'status',
+                               'quantity', 'unit', 'tagNumber', 'originDate', 'notes', 'profile',
+                               'customFields', 'totals', 'logCount', 'createdAt', 'updatedAt'])
+        && d.keys().hasAll(['id', 'name', 'itemType', 'fieldId', 'species', 'zone', 'status',
+                            'quantity', 'unit', 'totals', 'logCount', 'createdAt', 'updatedAt'])
+        && d.id == itemId
+        && d.itemType in ['tree', 'animal', 'resource']
+        && itemId.matches((d.itemType == 'tree' ? 'TR' : d.itemType == 'animal' ? 'AN' : 'RS') + '-[0-9]{4,}')
+        && str(d.name, 120)
+        && str(d.fieldId, 20)
+        && d.species is string && d.species.size() <= 120
+        && d.zone is string && d.zone.size() <= 120
+        && d.status in ['healthy', 'attention']
+        && d.quantity is number && d.quantity > 0 && d.quantity <= 1000000000
+        && str(d.unit, 30)
+        && d.totals is map && d.totals.size() <= 20
+        && d.logCount is int && d.logCount >= 0
+        && isoDate(d.createdAt) && isoDate(d.updatedAt)
+        && optStr('breed', 120) && optStr('tagNumber', 60) && optStr('notes', 4000)
+        && optIsoDate('originDate')
+        && (!('profile' in d) || (d.profile is map && d.profile.size() <= 40))
+        && (!('customFields' in d) || (d.customFields is list && d.customFields.size() <= 30));
+    }
+
+    function validLog(uid, itemId, logId) {
+      let d = data();
+      return d.keys().hasOnly(['id', 'itemId', 'kind', 'amount', 'unit', 'note', 'performedBy',
+                               'appliedAt', 'createdAt', 'farmId'])
+        && d.keys().hasAll(['id', 'itemId', 'kind', 'amount', 'unit', 'appliedAt', 'createdAt', 'farmId'])
+        && d.farmId == uid
+        && d.id == logId
+        && d.itemId == itemId
+        && d.kind in ['water', 'manure', 'feed', 'fertilizer', 'medicine', 'vaccination',
+                      'health-check', 'harvest', 'weight', 'spray', 'pruning', 'note']
+        && d.amount is number && d.amount >= 0 && d.amount <= 1000000000
+        && d.unit is string && d.unit.size() <= 30   // '' for pruning / note
+        && isoDate(d.appliedAt) && isoDate(d.createdAt)
+        && optStr('note', 2000) && optStr('performedBy', 120);
+    }
+
+    function validField(fieldId) {
+      let d = data();
+      return d.keys().hasOnly(['id', 'name', 'area', 'unit', 'note', 'map', 'createdAt', 'updatedAt'])
+        && d.keys().hasAll(['id', 'name', 'createdAt', 'updatedAt'])
+        && d.id == fieldId
+        && fieldId.matches('FD-[0-9]{4,}')
+        && str(d.name, 120)
+        && (!('area' in d) || (d.area is number && d.area > 0 && d.area <= 100000000))
+        && optStr('unit', 20) && optStr('note', 2000)
+        && isoDate(d.createdAt) && isoDate(d.updatedAt)
+        // Map grid is at most 32×32 cells and 60 zones (MAP_LIMITS).
+        && (!('map' in d) || (d.map is map
+              && (!('cells' in d.map) || (d.map.cells is list && d.map.cells.size() <= 1024))
+              && (!('zones' in d.map) || (d.map.zones is list && d.map.zones.size() <= 60))));
+    }
+
+    function validTask(taskId) {
+      let d = data();
+      return d.keys().hasOnly(['id', 'title', 'type', 'dueDate', 'repeat', 'priority', 'itemId',
+                               'fieldId', 'notes', 'done', 'doneAt', 'createdAt', 'updatedAt'])
+        && d.keys().hasAll(['id', 'title', 'type', 'dueDate', 'repeat', 'priority', 'done',
+                            'createdAt', 'updatedAt'])
+        && d.id == taskId
+        && taskId.matches('TK-[0-9]{4,}')
+        && str(d.title, 200)
+        && str(d.type, 40)
+        && isoDate(d.dueDate)
+        && d.repeat in ['none', 'daily', 'weekly', 'monthly', 'yearly']
+        && d.priority in ['low', 'normal', 'high']
+        && d.done is bool
+        && optStr('itemId', 20) && optStr('fieldId', 20) && optStr('notes', 4000)
+        && optIsoDate('doneAt')
+        && isoDate(d.createdAt) && isoDate(d.updatedAt);
+    }
+
+    // ID counters: known prefixes only, integers, and they may only go up
+    // (so ids are never reused).
+    function counterOk(key) {
+      return !(key in data())
+        || (data()[key] is int && data()[key] >= 0
+            && (resource == null || data()[key] >= resource.data.get(key, 0)));
+    }
+
+    function validCounters() {
+      return data().keys().hasOnly(['TR', 'AN', 'RS', 'FD', 'TK'])
+        && counterOk('TR') && counterOk('AN') && counterOk('RS') && counterOk('FD') && counterOk('TK');
+    }
+
+    // ------------------------------------------------------------------ rules
+
+    match /farms/{uid} {
+      // The farm root document itself isn't used by the app.
+      allow read: if isOwner(uid);
+      allow write: if false;
+
+      match /items/{itemId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && validItem(itemId);
+        allow update: if isOwner(uid) && validItem(itemId)
+                      && unchanged(['id', 'itemType', 'createdAt'])
+                      && data().logCount >= resource.data.logCount;
+
+        // Logs are an append-only history: create or delete, never edit.
+        match /logs/{logId} {
+          allow read, delete: if isOwner(uid);
+          allow create: if isOwner(uid) && validLog(uid, itemId, logId);
+          allow update: if false;
+        }
+      }
+
+      match /fields/{fieldId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && validField(fieldId);
+        allow update: if isOwner(uid) && validField(fieldId) && unchanged(['id', 'createdAt']);
+      }
+
+      match /tasks/{taskId} {
+        allow read, delete: if isOwner(uid);
+        allow create: if isOwner(uid) && validTask(taskId);
+        allow update: if isOwner(uid) && validTask(taskId) && unchanged(['id', 'createdAt']);
+      }
+
+      match /meta/counters {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validCounters();
+        allow delete: if false;
+      }
+    }
+
+    // Collection-group reads of logs (dashboard): only your own farm's logs.
+    // Queries must filter on farmId == your uid for this to pass.
+    match /{path=**}/logs/{logId} {
+      allow read: if signedIn() && resource.data.farmId == request.auth.uid;
+    }
+
+    // Everything else is denied by default.
+  }
+}
