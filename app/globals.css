@@ -1094,3 +1094,49 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .confirm-dialog .modal-actions { flex-direction: column-reverse; gap: 10px; margin-top: 22px; }
   .confirm-dialog .cancel-button, .confirm-dialog .primary-button { flex: none; width: 100%; height: 52px; justify-content: center; font-size: 16px; }
 }
+
+/* ---- Field shape (outline from measurements) ---- */
+.shape-editor { flex: 1 1 560px; min-width: 0; }
+.shape-kinds { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.shape-kind { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink-2); border-radius: var(--pill); padding: 8px 14px 8px 10px; font-size: 13.5px; font-weight: 700; transition: border-color 0.12s ease, background 0.12s ease; }
+.shape-kind svg { width: 22px; height: 22px; fill: var(--olive-050); stroke: var(--olive); stroke-width: 1.6; stroke-linejoin: round; }
+.shape-kind:hover { border-color: var(--clay); color: var(--clay); }
+.shape-kind.selected { border-color: var(--clay); background: var(--clay-050); color: var(--clay-600); }
+.shape-kind.selected svg { fill: var(--card); stroke: var(--clay); }
+.shape-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(220px, 0.9fr); gap: 18px; align-items: start; }
+.shape-inputs { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.shape-hint { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--ink-2); max-width: 62ch; }
+.shape-sides { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.shape-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shape-side-num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--olive-050); color: var(--olive); font-size: 12px; font-weight: 800; flex-shrink: 0; }
+.shape-side select { height: 44px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--card-inset); color: var(--ink); padding: 0 10px; font-size: 14px; font-weight: 600; }
+.shape-side .unit-input.deg input { width: 56px; }
+.shape-arrow { width: 22px; height: 22px; fill: var(--clay); transition: transform 0.15s ease; flex-shrink: 0; }
+.shape-closing { margin: 2px 0 0; font-size: 13px; color: var(--ink-2); border-inline-start: 3px dashed var(--clay); padding-inline-start: 10px; }
+.shape-apply-row { padding-top: 4px; border-top: 1px dashed var(--line); }
+.shape-apply-row .ghost-button, .shape-apply-row .primary-button { height: 44px; }
+.shape-pending { margin: -4px 0 0; font-size: 12.5px; font-weight: 700; color: #92671b; }
+.shape-preview { margin: 0; background: var(--card-inset); border: 1px solid var(--line-soft); border-radius: var(--r-sm); padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 220px; justify-content: center; }
+.shape-svg { width: 100%; height: auto; max-height: 260px; display: block; }
+.shape-fill { fill: var(--olive-050); stroke: var(--olive); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.shape-guide { stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.shape-closing-edge { stroke: var(--clay); stroke-width: 2.5; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.shape-len { fill: var(--ink-2); font-weight: 700; }
+.shape-corner { fill: var(--clay); font-weight: 800; }
+.shape-start { fill: var(--clay); }
+.shape-preview figcaption { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--ink-3); }
+.shape-preview figcaption strong { color: var(--ink); font-size: 14px; }
+.shape-error { margin: 0; text-align: center; font-size: 13.5px; font-weight: 700; color: #b0472f; line-height: 1.5; padding: 20px 8px; }
+
+.map-cell.outside { background: transparent; }
+.map-cell.outside:hover { outline: none; }
+.map-grid:has(.map-cell.outside) { background: transparent; border-color: transparent; }
+.map-grid:has(.map-cell.outside) .map-cell:not(.outside) { box-shadow: 0 0 0 1px var(--line-soft); }
+.map-outline { position: absolute; inset: 3px; width: calc(100% - 6px); height: calc(100% - 6px); pointer-events: none; overflow: visible; }
+.map-outline polygon { fill: none; stroke: var(--olive); stroke-width: 2.5; stroke-linejoin: round; }
+.edge-labels { position: absolute; inset: 3px; pointer-events: none; }
+.edge-label { position: absolute; transform: translate(-50%, -50%); font-size: 11px; font-weight: 800; color: var(--olive); background: var(--card); border: 1px solid var(--line); padding: 2px 7px; border-radius: var(--pill); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 820px) {
+  .shape-body { grid-template-columns: 1fr; }
+}

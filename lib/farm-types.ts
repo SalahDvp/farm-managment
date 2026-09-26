@@ -1,3 +1,5 @@
+import type { FieldShape } from '@/lib/field-shape'
+
 // Shared domain types for the farm management system.
 // Every physical thing on the farm — a tree, a sheep, a goat, a water tank —
 // is an `Item` with its own unique id. Every input applied to that item
@@ -205,7 +207,7 @@ export interface MapZone {
   itemIds?: string[]
 }
 
-/** A grid layout of a field: dimensions plus which zone each cell belongs to. */
+/** A grid layout of a field: dimensions, its outline, and which zone each cell belongs to. */
 export interface FieldMap {
   /** Physical size of the field. */
   width: number
@@ -218,6 +220,8 @@ export interface FieldMap {
   /** cols*rows entries, each an empty string or a zone id. */
   cells: string[]
   zones: MapZone[]
+  /** Real outline of the field; width/height are its bounding box. Absent means a plain rectangle. */
+  shape?: FieldShape
   updatedAt: string
 }
 

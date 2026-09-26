@@ -1,6 +1,7 @@
 'use client'
 
-// Field map designer. A field is laid out as a grid scaled to its real size;
+// Field map designer. A field is laid out as a grid scaled to its real size and
+// clipped to its real outline (rectangle, triangle, L-shape, a boundary walk…);
 // the farmer creates named zones (e.g. "North orchard"), paints where each one
 // is, and records what it holds — crop, variety, soil, irrigation, notes, and
 // the animals or trees located there.
@@ -11,14 +12,12 @@ import {
   Check,
   Eraser,
   Loader2,
-  Maximize2,
   MousePointer2,
   Paintbrush,
   Pencil,
   Plus,
   Recycle,
   Route,
-  Ruler,
   Save,
   Sparkles,
   Sprout,
@@ -43,6 +42,8 @@ import {
   type ZoneKind,
 } from '@/lib/farm-types'
 import { nextZoneId, upgradeMap } from '@/lib/map-utils'
+import { MIN_COVERAGE, buildOutline, cellCoverage, defaultShape, type FieldShape, type Outline } from '@/lib/field-shape'
+import { ShapeEditor } from '@/components/field-shape-editor'
 import { TYPE_META, type Icon } from '@/lib/ui'
 import { useI18n } from '@/components/language-provider'
 import { useToast } from '@/components/toast-provider'
@@ -101,13 +102,17 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
   // The editor is keyed by field id, so this only runs when a field opens.
   const [initial] = useState(() => {
     const m = field.map
-    if (!m) return { width: 100, height: 60, cols: 10, rows: 6, cells: new Array<string>(60).fill(''), zones: [] as MapZone[] }
+    if (!m) return { width: 100, height: 60, cols: 10, rows: 6, cells: new Array<string>(60).fill(''), zones: [] as MapZone[], shape: defaultShape('rectangle', 100, 60) }
     const upgraded = upgradeMap(m)
-    return { width: m.width, height: m.height, cols: m.cols, rows: m.rows, cells: upgraded.cells, zones: upgraded.zones }
+    const shape = m.shape ?? defaultShape('rectangle', m.width, m.height)
+    return { width: m.width, height: m.height, cols: m.cols, rows: m.rows, cells: upgraded.cells, zones: upgraded.zones, shape }
   })
 
   const [width, setWidth] = useState(initial.width)
   const [height, setHeight] = useState(initial.height)
+  /** The outline the grid is currently clipped to, and the one being edited in the shape panel. */
+  const [shape, setShape] = useState<FieldShape>(initial.shape)
+  const [draft, setDraft] = useState<FieldShape>(initial.shape)
   const [cellSize, setCellSize] = useState(Math.max(1, Math.round(initial.width / initial.cols)))
   const [cols, setCols] = useState(initial.cols)
   const [rows, setRows] = useState(initial.rows)
@@ -141,37 +146,66 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
+  const outline: Outline = useMemo(() => {
+    const o = buildOutline(shape)
+    if (typeof o !== 'string') return o
+    const pts = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }]
+    return { points: pts, width, height, area: width * height, edges: [width, height, width, height] }
+  }, [shape, width, height])
+  const isRect = shape.kind === 'rectangle'
+  // Share of each cell inside the field; cells mostly outside the outline can't be painted.
+  const coverage = useMemo(
+    () => (isRect ? new Array<number>(cols * rows).fill(1) : cellCoverage(outline.points, width, height, cols, rows)),
+    [isRect, outline, width, height, cols, rows],
+  )
+  const usable = (i: number) => coverage[i] >= MIN_COVERAGE
+  const pendingShape = JSON.stringify(draft) !== JSON.stringify(shape)
+
   const colors = useMemo(() => zoneColors(zones), [zones])
   const zoneById = useMemo(() => new Map(zones.map((z) => [z.id, z])), [zones])
   const cellStats = useMemo(() => {
-    const s = new Map<string, { count: number; sx: number; sy: number }>()
+    const s = new Map<string, { count: number; cover: number; sx: number; sy: number }>()
     cells.forEach((id, i) => {
       if (!id) return
-      const entry = s.get(id) ?? { count: 0, sx: 0, sy: 0 }
+      const entry = s.get(id) ?? { count: 0, cover: 0, sx: 0, sy: 0 }
       entry.count += 1
+      entry.cover += coverage[i] ?? 1
       entry.sx += (i % cols) + 0.5
       entry.sy += Math.floor(i / cols) + 0.5
       s.set(id, entry)
     })
     return s
-  }, [cells, cols])
+  }, [cells, cols, coverage])
 
-  const total = cols * rows
-  const painted = cells.reduce((n, c) => (c ? n + 1 : n), 0)
+  // Totals count only cells that fall inside the field's outline.
+  const total = coverage.reduce((n, c) => (c >= MIN_COVERAGE ? n + 1 : n), 0) || 1
+  const painted = cells.reduce((n, c, i) => (c && usable(i) ? n + 1 : n), 0)
   const cellArea = (width / cols) * (height / rows)
-  const areaLabel = (count: number) => {
-    const m2 = count * cellArea
-    return m2 >= 10000 ? `${num(m2 / 10000, 2)} ha` : `${num(m2)} m²`
-  }
+  const fmtArea = (m2: number) => (m2 >= 10000 ? `${num(m2 / 10000, 2)} ha` : `${num(m2)} m²`)
+  /** Area of a zone from how much of each of its cells lies inside the field. */
+  const zoneArea = (id: string) => (cellStats.get(id)?.cover ?? 0) * cellArea
+  const zonePct = (id: string) => num(Math.min(100, (zoneArea(id) / outline.area) * 100))
   const markDirty = () => setDirty(true)
 
-  const applyDims = () => {
-    const nc = clamp(Math.round(width / cellSize) || 1, 1, MAP_LIMITS.maxCols)
-    const nr = clamp(Math.round(height / cellSize) || 1, 1, MAP_LIMITS.maxRows)
+  const applyShape = () => {
+    const o = buildOutline(draft)
+    if (typeof o === 'string') {
+      toast(t(`shape.err.${o}`), 'error')
+      return
+    }
+    const nc = clamp(Math.round(o.width / cellSize) || 1, 1, MAP_LIMITS.maxCols)
+    const nr = clamp(Math.round(o.height / cellSize) || 1, 1, MAP_LIMITS.maxRows)
+    const cover = draft.kind === 'rectangle' ? null : cellCoverage(o.points, o.width, o.height, nc, nr)
     const next = new Array<string>(nc * nr).fill('')
     for (let r = 0; r < Math.min(nr, rows); r += 1) {
-      for (let c = 0; c < Math.min(nc, cols); c += 1) next[r * nc + c] = cells[r * cols + c] || ''
+      for (let c = 0; c < Math.min(nc, cols); c += 1) {
+        const i = r * nc + c
+        if (!cover || cover[i] >= MIN_COVERAGE) next[i] = cells[r * cols + c] || ''
+      }
     }
+    setWidth(o.width)
+    setHeight(o.height)
+    setShape(draft)
     setCols(nc)
     setRows(nr)
     setCells(next)
@@ -190,7 +224,7 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
 
   const handlePointer = (clientX: number, clientY: number, isStart: boolean) => {
     const idx = cellAt(clientX, clientY)
-    if (idx === null) return
+    if (idx === null || !usable(idx)) return
     if (tool === 'inspect') {
       if (isStart && cells[idx]) {
         setOpenZoneId(cells[idx])
@@ -264,7 +298,7 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
       const res = await apiFetch(`/api/fields/${field.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ map: { width, height, unit: 'm', cols, rows, cells, zones } }),
+        body: JSON.stringify({ map: { width, height, unit: 'm', cols, rows, cells, zones, shape } }),
       })
       if (!res.ok) throw new Error('save failed')
       setDirty(false)
@@ -299,16 +333,7 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
       </ol>
 
       <div className="map-controls">
-        <div className="map-dims">
-          <span className="map-dims-title"><Ruler />{t('map.dimensions')}</span>
-          <div className="map-dim-fields">
-            <label>{t('map.width')}<span className="unit-input"><input type="number" min={1} value={width} onChange={(e) => setWidth(Number(e.target.value) || 0)} /><em>m</em></span></label>
-            <span className="dim-x">×</span>
-            <label>{t('map.height')}<span className="unit-input"><input type="number" min={1} value={height} onChange={(e) => setHeight(Number(e.target.value) || 0)} /><em>m</em></span></label>
-            <label>{t('map.cellSize')}<span className="unit-input"><input type="number" min={1} value={cellSize} onChange={(e) => setCellSize(Math.max(1, Number(e.target.value) || 1))} /><em>m</em></span></label>
-            <button className="ghost-button" onClick={applyDims}><Maximize2 />{t('map.resize')}</button>
-          </div>
-        </div>
+        <ShapeEditor draft={draft} onChange={setDraft} cellSize={cellSize} onCellSize={setCellSize} onApply={applyShape} pending={pendingShape} />
         <div className="map-actions">
           {dirty && <span className="map-unsaved">{t('map.unsaved')}</span>}
           <button className="ghost-button danger" onClick={clearAll}><Trash2 />{t('map.clear')}</button>
@@ -361,15 +386,37 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
                 onPointerUp={() => { painting.current = false }}
                 onPointerCancel={() => { painting.current = false }}
               >
-                {cells.map((id, i) => (
-                  <div
-                    key={i}
-                    className={id ? 'map-cell filled' : 'map-cell'}
-                    style={id ? { background: colors.get(id) } : undefined}
-                    title={id ? zoneById.get(id)?.name : ''}
-                  />
-                ))}
+                {cells.map((id, i) =>
+                  usable(i) ? (
+                    <div
+                      key={i}
+                      className={id ? 'map-cell filled' : 'map-cell'}
+                      style={id ? { background: colors.get(id) } : undefined}
+                      title={id ? zoneById.get(id)?.name : ''}
+                    />
+                  ) : (
+                    <div key={i} className="map-cell outside" />
+                  ),
+                )}
               </div>
+              {!isRect && (
+                <>
+                  <svg className="map-outline" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+                    <polygon points={outline.points.map((p) => `${p.x},${p.y}`).join(' ')} vectorEffect="non-scaling-stroke" />
+                  </svg>
+                  <div className="edge-labels" dir="ltr" aria-hidden="true">
+                    {outline.edges.map((len, i) => {
+                      const a = outline.points[i]
+                      const b = outline.points[(i + 1) % outline.points.length]
+                      return (
+                        <span key={i} className="edge-label" style={{ left: `${((a.x + b.x) / 2 / width) * 100}%`, top: `${((a.y + b.y) / 2 / height) * 100}%` }}>
+                          {num(len, len < 10 ? 1 : 0)} m
+                        </span>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
               <div className="zone-labels" dir="ltr" aria-hidden="true">
                 {zones.map((z) => {
                   const s = cellStats.get(z.id)
@@ -386,6 +433,7 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
           <p className="map-grid-info">
             <MetaLine parts={[
               t('map.gridInfo', { cols, rows, cell: `${num(width / cols)}×${num(height / rows)}`, unit: 'm' }),
+              t('shape.area', { area: fmtArea(outline.area) }),
               `${num(painted)}/${num(total)}`,
               `${num((painted / total) * 100)}%`,
             ]} />
@@ -397,8 +445,8 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
             <ZoneDetails
               zone={openZone}
               color={colors.get(openZone.id)!}
-              area={areaLabel(cellStats.get(openZone.id)?.count ?? 0)}
-              pct={num(((cellStats.get(openZone.id)?.count ?? 0) / total) * 100)}
+              area={fmtArea(zoneArea(openZone.id))}
+              pct={zonePct(openZone.id)}
               items={items}
               onBack={() => setOpenZoneId(null)}
               onChange={(patch) => updateZone(openZone.id, patch)}
@@ -455,8 +503,8 @@ export function FieldMapEditor({ field, items, onSaved, onDirtyChange }: {
                             <small>
                               <MetaLine parts={[
                                 t(`zone.${z.kind}`),
-                                count ? areaLabel(count) : t('map.notPainted'),
-                                count > 0 && `${num((count / total) * 100)}%`,
+                                count ? fmtArea(zoneArea(z.id)) : t('map.notPainted'),
+                                count > 0 && `${zonePct(z.id)}%`,
                                 linked > 0 && t('map.linkedCount', { n: linked }),
                               ]} />
                             </small>

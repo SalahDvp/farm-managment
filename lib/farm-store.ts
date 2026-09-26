@@ -11,6 +11,7 @@
 // UI talks to either through lib/client-api.ts.
 
 import { sanitizeZone, upgradeMap } from '@/lib/map-utils'
+import { buildOutline, sanitizeShape } from '@/lib/field-shape'
 import { sanitizeCustomFields, sanitizeProfile } from '@/lib/validate'
 import {
   DEFAULT_UNIT,
@@ -222,9 +223,14 @@ function normalizeMap(map: FieldMap): FieldMap {
     const v = upgraded.cells[i]
     cells.push(typeof v === 'string' && seen.has(v) ? v : '')
   }
-  const width = Math.max(1, Math.min(MAP_LIMITS.maxDim, Number(map.width) || 1))
-  const height = Math.max(1, Math.min(MAP_LIMITS.maxDim, Number(map.height) || 1))
-  return { width, height, unit: (map.unit || 'm').trim(), cols, rows, cells, zones, updatedAt: now() }
+  // A valid outline dictates the map's bounding box; otherwise it's a plain rectangle.
+  const shape = sanitizeShape(map.shape)
+  const outline = shape ? buildOutline(shape) : undefined
+  const box = outline && typeof outline !== 'string' ? outline : { width: Number(map.width), height: Number(map.height) }
+  const width = Math.max(1, Math.min(MAP_LIMITS.maxDim, box.width || 1))
+  const height = Math.max(1, Math.min(MAP_LIMITS.maxDim, box.height || 1))
+  const base = { width, height, unit: (map.unit || 'm').trim(), cols, rows, cells, zones, updatedAt: now() }
+  return shape ? { ...base, shape } : base
 }
 
 /** Present stored maps in the current shape without rewriting them. */

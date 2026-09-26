@@ -32,6 +32,7 @@ import {
   type UpdateItemInput,
   type UpdateTaskInput,
 } from '@/lib/farm-types'
+import type { FieldShape } from '@/lib/field-shape'
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -226,6 +227,7 @@ export function parseUpdateField(body: unknown): UpdateFieldInput {
       rows: num(m.rows) ?? 1,
       cells: (m.cells as unknown[]).map((c) => (typeof c === 'string' ? c : '')),
       zones: (Array.isArray(m.zones) ? m.zones : []) as MapZone[],
+      shape: m.shape as FieldShape | undefined,
       updatedAt: new Date().toISOString(),
     } satisfies FieldMap
   }
